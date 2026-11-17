@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import QRCode from 'qrcode'
 import './App.css'
 
 const APP_NAME = 'Argasus'
@@ -44,6 +45,34 @@ function currentTime() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
+const CONNECT_TTL_MS = 10 * 60 * 1000
+
+function makeToken() {
+  const bytes = new Uint8Array(8)
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes)
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256)
+    }
+  }
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase()
+  return `ARG-${hex.match(/.{1,4}/g).join('-')}`
+}
+
+function readPendingConnection() {
+  const params = new URLSearchParams(window.location.search)
+  const token = params.get('connect')
+  if (!token) return null
+  const expiresAt = Number(params.get('exp'))
+  return { token, expired: Boolean(expiresAt) && Date.now() > expiresAt }
+}
+
+function formatRemaining(milliseconds) {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1000))
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+}
+
 function App() {
   const [healthScore, setHealthScore] = useState(98.4)
   const [activity, setActivity] = useState(initialActivity)
@@ -51,6 +80,39 @@ function App() {
   const [checking, setChecking] = useState(false)
   const [policyOpen, setPolicyOpen] = useState(false)
   const [toast, setToast] = useState(null)
+  const [connection, setConnection] = useState(null)
+  const [now, setNow] = useState(() => Date.now())
+  const [copied, setCopied] = useState(false)
+  const [pendingConnection, setPendingConnection] = useState(readPendingConnection)
+  const [paired, setPaired] = useState(() => {
+    try {
+      return JSON.parse(window.localStorage.getItem('argasus.paired') || '[]')
+    } catch {
+      return []
+    }
+  })
+
+  const connectionExpired = connection ? now >= connection.expiresAt : false
+
+  useEffect(() => {
+    if (!connection) return undefined
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [connection])
+
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has('connect')) return
+    url.searchParams.delete('connect')
+    url.searchParams.delete('exp')
+    window.history.replaceState({}, '', url)
+  })
+
+  useEffect(() => {
+    if (!pendingConnection?.expired) return undefined
+    const timer = window.setTimeout(() => setPendingConnection(null), 5000)
+    return () => window.clearTimeout(timer)
+  }, [pendingConnection])
 
   useEffect(() => {
     if (!toast) return undefined
@@ -74,6 +136,75 @@ function App() {
 
   function notify(message, tone = 'success') {
     setToast({ message, tone, id: Date.now() })
+  }
+
+  async function generateConnection() {
+    const token = makeToken()
+    const expiresAt = Date.now() + CONNECT_TTL_MS
+    const url = new URL(window.location.href)
+    url.search = ''
+    url.hash = ''
+    url.searchParams.set('connect', token)
+    url.searchParams.set('exp', String(expiresAt))
+    const link = url.toString()
+
+    setConnection({ token, expiresAt, url: link, qr: null })
+    setNow(Date.now())
+    setCopied(false)
+    notify('Connection link generated')
+
+    try {
+      const qr = await QRCode.toDataURL(link, {
+        width: 260,
+        margin: 1,
+        errorCorrectionLevel: 'M',
+        color: { dark: '#07111f', light: '#ffffff' },
+      })
+      setConnection((current) => (current && current.token === token ? { ...current, qr } : current))
+    } catch {
+      notify('Could not generate the QR code', 'error')
+    }
+  }
+
+  async function copyConnectionLink() {
+    if (!connection) return
+    try {
+      await navigator.clipboard.writeText(connection.url)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+      notify('Connection link copied')
+    } catch {
+      document.getElementById('connect-link')?.select()
+      notify('Select and copy the link manually', 'error')
+    }
+  }
+
+  function confirmConnection() {
+    if (!pendingConnection) return
+    const token = pendingConnection.token
+    const nextPaired = [{ token, at: new Date().toISOString() }, ...paired].slice(0, 5)
+    setPaired(nextPaired)
+    try {
+      window.localStorage.setItem('argasus.paired', JSON.stringify(nextPaired))
+    } catch {
+      // Storage may be unavailable in private browsing; pairing still works for this session.
+    }
+    setActivity((previous) => [
+      {
+        time: currentTime(),
+        title: 'Device connected',
+        note: `Device paired with code ${token}.`,
+        fresh: true,
+      },
+      ...previous.map((item) => ({ ...item, fresh: false })),
+    ].slice(0, 6))
+    setPendingConnection(null)
+    notify('Device connected to Argasus')
+  }
+
+  function declineConnection() {
+    setPendingConnection(null)
+    notify('Connection request declined', 'neutral')
   }
 
   function runHealthCheck() {
@@ -110,6 +241,7 @@ function App() {
       trustStack: pillars,
       coverageMatrix: matrix.map(([capability, control]) => ({ capability, control })),
       recentActivity: activity.map(({ time, title, note }) => ({ time, title, note })),
+      pairedDevices: paired.map(({ token, at }) => ({ token, at })),
     }
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -136,6 +268,7 @@ function App() {
 
         <nav className="nav" aria-label="Main navigation">
           <a href="#overview">Overview</a>
+          <a href="#connect">Connect</a>
           <a href="#controls">Controls</a>
           <a href="#coverage">Coverage</a>
           <a href="#runbook">Runbook</a>
@@ -200,6 +333,64 @@ function App() {
             <p className="checked-note">
               {lastChecked ? `Last check ${lastChecked}` : 'No check run this session'}
             </p>
+          </div>
+        </section>
+
+        <section className="panel connect-panel" id="connect">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Device enrollment</p>
+              <h2>Connect a device</h2>
+            </div>
+            <span className="pill neutral">
+              {paired.length ? `${paired.length} connected` : 'Ready to pair'}
+            </span>
+          </div>
+
+          <div className="connect-grid">
+            <div className="connect-copy">
+              <p>
+                Generate a one-time link and QR code to pair a device with this console. Scanning
+                the code opens the approval screen on that device.
+              </p>
+              <button type="button" className="primary-button" onClick={generateConnection}>
+                {connection && !connectionExpired ? 'Regenerate link' : 'Generate connection link'}
+              </button>
+
+              {connection ? (
+                <div className="link-box">
+                  <label htmlFor="connect-link">Connection link</label>
+                  <div className="link-row">
+                    <input id="connect-link" readOnly value={connection.url} onFocus={(event) => event.target.select()} />
+                    <button type="button" className="secondary-button" onClick={copyConnectionLink}>
+                      {copied ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className={`link-meta ${connectionExpired ? 'expired' : ''}`}>
+                    <code>{connection.token}</code>
+                    <span>
+                      {connectionExpired
+                        ? 'Expired — generate a new link'
+                        : `Expires in ${formatRemaining(connection.expiresAt - now)}`}
+                    </span>
+                  </p>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="qr-area">
+              {connection && connection.qr ? (
+                <>
+                  <img src={connection.qr} alt="QR code for the device connection link" />
+                  <p>Scan to open the pairing link</p>
+                </>
+              ) : (
+                <div className={`qr-placeholder ${connection ? 'loading' : ''}`}>
+                  <span aria-hidden="true">▦</span>
+                  <p>{connection ? 'Generating QR code…' : 'Your QR code appears here'}</p>
+                </div>
+              )}
+            </div>
           </div>
         </section>
 
@@ -308,6 +499,27 @@ function App() {
         <span>Built for consent-based monitoring and recovery</span>
       </footer>
 
+      {pendingConnection && !pendingConnection.expired ? (
+        <div className="modal-backdrop">
+          <div className="modal panel connect-dialog" role="dialog" aria-modal="true" aria-labelledby="connect-title">
+            <p className="eyebrow">Incoming request</p>
+            <h2 id="connect-title">Connect this device to {APP_NAME}?</h2>
+            <p className="modal-intro">
+              Confirm to register this device with the console using the one-time code below.
+            </p>
+            <p className="connect-code">{pendingConnection.token}</p>
+            <div className="dialog-actions">
+              <button type="button" className="secondary-button" onClick={declineConnection}>
+                Decline
+              </button>
+              <button type="button" className="primary-button" onClick={confirmConnection}>
+                Connect device
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {policyOpen ? (
         <div className="modal-backdrop" onMouseDown={() => setPolicyOpen(false)}>
           <div
@@ -350,6 +562,13 @@ function App() {
               Done
             </button>
           </div>
+        </div>
+      ) : null}
+
+      {pendingConnection?.expired ? (
+        <div className="toast error" role="status">
+          <span className="toast-dot" aria-hidden="true" />
+          This connection link has expired — generate a new one
         </div>
       ) : null}
 
