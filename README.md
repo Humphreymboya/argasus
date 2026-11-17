@@ -7,7 +7,8 @@ A privacy-first **secure operations console** for device trust, compliance, and 
 - Live health score with an on-demand **Run health check** scan
 - Interactive **policy map** covering trust bootstrapping, beacon health, control coverage, recovery, and privacy
 - One-click **Export report** that downloads a timestamped JSON posture report (includes paired devices)
-- **Connect a device** — generates a time-limited pairing link plus a scannable QR code; opening the link shows an approval screen, and confirmed devices appear in the console and activity feed
+- **Connect a device** — generates a time-limited pairing link plus a scannable QR code; opening the link shows an approval screen. Paired devices appear in a visible **Connected devices** list with a disconnect action
+- A **What Argasus does / How it works** section explaining each feature and the demo's scope
 - Trust stack progress, recent activity feed, coverage matrix, and deployment runbook
 - Responsive dark UI with keyboard-accessible dialogs and reduced-motion support
 

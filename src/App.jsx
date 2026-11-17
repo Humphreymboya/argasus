@@ -73,6 +73,12 @@ function formatRemaining(milliseconds) {
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 }
 
+function formatConnectedAt(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Connected this session'
+  return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+}
+
 function App() {
   const [healthScore, setHealthScore] = useState(98.4)
   const [activity, setActivity] = useState(initialActivity)
@@ -207,6 +213,26 @@ function App() {
     notify('Connection request declined', 'neutral')
   }
 
+  function disconnectDevice(token) {
+    const nextPaired = paired.filter((device) => device.token !== token)
+    setPaired(nextPaired)
+    try {
+      window.localStorage.setItem('argasus.paired', JSON.stringify(nextPaired))
+    } catch {
+      // Storage may be unavailable in private browsing; disconnect still applies this session.
+    }
+    setActivity((previous) => [
+      {
+        time: currentTime(),
+        title: 'Device disconnected',
+        note: `Removed paired device ${token} from the console.`,
+        fresh: true,
+      },
+      ...previous.map((item) => ({ ...item, fresh: false })),
+    ].slice(0, 6))
+    notify('Device disconnected')
+  }
+
   function runHealthCheck() {
     if (checking) return
     setChecking(true)
@@ -268,6 +294,7 @@ function App() {
 
         <nav className="nav" aria-label="Main navigation">
           <a href="#overview">Overview</a>
+          <a href="#about">How it works</a>
           <a href="#connect">Connect</a>
           <a href="#controls">Controls</a>
           <a href="#coverage">Coverage</a>
@@ -336,6 +363,60 @@ function App() {
           </div>
         </section>
 
+        <section className="panel about-panel" id="about">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Start here</p>
+              <h2>What Argasus does</h2>
+            </div>
+            <span className="pill neutral">Guided demo</span>
+          </div>
+          <p className="about-intro">
+            Argasus is a security console for answering three questions about your devices: are
+            they healthy, are they following policy, and can you recover them? Try each step below.
+          </p>
+
+          <div className="about-grid">
+            <article>
+              <span>01</span>
+              <h3>Check device health</h3>
+              <p>
+                Press <strong>Run health check</strong> at the top to scan the fleet. The score,
+                activity feed, and timestamp update with the result.
+              </p>
+            </article>
+            <article>
+              <span>02</span>
+              <h3>Pair a device</h3>
+              <p>
+                Use <strong>Connect a device</strong> to create a link and QR code. Open or scan it,
+                approve the request, and the device appears in the list below.
+              </p>
+            </article>
+            <article>
+              <span>03</span>
+              <h3>Understand the controls</h3>
+              <p>
+                <strong>View policy map</strong> explains the five trust controls. The coverage
+                matrix and trust stack show how each one is doing.
+              </p>
+            </article>
+            <article>
+              <span>04</span>
+              <h3>Take the evidence</h3>
+              <p>
+                <strong>Export report</strong> downloads the current posture, including every
+                paired device, as a JSON file.
+              </p>
+            </article>
+          </div>
+
+          <p className="about-note">
+            This is a front-end demo: the scan is simulated and pairing is stored in this browser
+            only. No device is contacted and no data leaves your machine.
+          </p>
+        </section>
+
         <section className="panel connect-panel" id="connect">
           <div className="section-heading">
             <div>
@@ -391,6 +472,38 @@ function App() {
                 </div>
               )}
             </div>
+          </div>
+
+          <div className="paired-devices">
+            <div className="section-heading">
+              <h3>Connected devices</h3>
+              <span className="pill">Trusted</span>
+            </div>
+            {paired.length ? (
+              <ul>
+                {paired.map((device) => (
+                  <li key={device.token}>
+                    <span className="device-icon" aria-hidden="true">◉</span>
+                    <div className="device-info">
+                      <strong>{device.token}</strong>
+                      <p>Connected {formatConnectedAt(device.at)}</p>
+                    </div>
+                    <span className="device-status">Active</span>
+                    <button
+                      type="button"
+                      className="link-button danger"
+                      onClick={() => disconnectDevice(device.token)}
+                    >
+                      Disconnect
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="devices-empty">
+                No devices connected yet. Generate a link above, then approve it on the other device.
+              </p>
+            )}
           </div>
         </section>
 
